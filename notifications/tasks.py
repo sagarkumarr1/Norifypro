@@ -66,7 +66,7 @@ def send_welcome_email(self, user_id):
                 logger.error(f"Failed to update notification status in DB: {db_err}")
 
         logger.error(f"Email failed for user {user_id}: {exc}")
-        raise self.retry(exc=exc)  # Celery 3 बार रिट्राय करेगा
+        raise self.retry(exc=exc) # Celery will retry 3 times
 
 
 @shared_task

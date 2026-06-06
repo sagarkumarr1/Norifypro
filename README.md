@@ -34,7 +34,7 @@ celery -A notifypro flower          # Terminal 4 → localhost:5555
 
 ## API Endpoints
 POST /api/users/register/   — Register + triggers welcome email
-GET  /api/notifications/    — Notification history
+POST /api/docs/             — Swagger UI
 
 ## Monitoring
 Flower Dashboard: http://localhost:5555
