@@ -6,35 +6,42 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 @shared_task(
     bind=True,
     max_retries=3,
-    default_retry_delay=60
+    default_retry_delay=60,
 )
-def send_welcome_email(self, user_id):
+def send_welcome_email(self, notification_id):
     """
-    Welcome email queue — Runs in the background.
-    Retries 3 times upon failure, after a 60-second interval.
+    Send welcome email asynchronously.
+
+    Features:
+    - Retry up to 3 times
+    - Track retry count
+    - Prevent duplicate emails
+    - Store failure reason
     """
-    from django.contrib.auth import get_user_model
+
     from .models import Notification
 
-    User = get_user_model()
-    notification = None  # FIX: Initialized the variable to None before hand to prevent the except block from crashing.
-
     try:
-        user = User.objects.get(id=user_id)
+        notification = Notification.objects.select_related(
+            "user"
+        ).get(id=notification_id)
 
-        # DB mein record banao — pending status
-        notification = Notification.objects.create(
-            user=user,
-            notification_type=Notification.TYPE_WELCOME,
-            subject=f"Welcome to NotifyPro, {user.username}!",
-            message=f"Hi {user.username},\n\nYour account has been successfully created..\n\nThank you!",
-            status=Notification.STATUS_PENDING
-        )
+        user = notification.user
 
-        # Send Email =
+        # Idempotency protection
+        if (
+            notification.status == Notification.STATUS_SENT
+            and notification.sent_at is not None
+        ):
+            logger.info(
+                f"Notification {notification.id} already sent."
+            )
+            return "Already sent"
+
         send_mail(
             subject=notification.subject,
             message=notification.message,
@@ -43,89 +50,174 @@ def send_welcome_email(self, user_id):
             fail_silently=False,
         )
 
-        # Success — status update karo
         notification.status = Notification.STATUS_SENT
         notification.sent_at = timezone.now()
-        notification.save()
+        notification.error_message = ""
 
-        logger.info(f"Welcome email sent to {user.email}")
+        notification.save(
+            update_fields=[
+                "status",
+                "sent_at",
+                "error_message",
+            ]
+        )
+
+        logger.info(
+            f"Email sent successfully to {user.email}"
+        )
+
         return f"Email sent to {user.email}"
 
-    except User.DoesNotExist:
-        logger.error(f"User {user_id} not found")
-        return "User not found"
+    except Notification.DoesNotExist:
+
+        logger.error(
+            f"Notification {notification_id} not found"
+        )
+
+        return "Notification not found"
 
     except Exception as exc:
-      # Failed — update the record (if the notification object had been created), then retry.
-        if notification:
-            try:
-                notification.status = Notification.STATUS_FAILED
-                notification.error_message = str(exc)
-                notification.save()
-            except Exception as db_err:
-                logger.error(f"Failed to update notification status in DB: {db_err}")
 
-        logger.error(f"Email failed for user {user_id}: {exc}")
-        raise self.retry(exc=exc) # Celery will retry 3 times
+        try:
+            notification = Notification.objects.get(
+                id=notification_id
+            )
+
+            notification.retry_count = (
+                self.request.retries + 1
+            )
+
+            notification.last_retry_at = (
+                timezone.now()
+            )
+
+            notification.error_message = str(exc)
+
+            # Final failure
+            if self.request.retries >= self.max_retries:
+
+                notification.status = (
+                    Notification.STATUS_FAILED
+                )
+
+                notification.save(
+                    update_fields=[
+                        "status",
+                        "retry_count",
+                        "last_retry_at",
+                        "error_message",
+                    ]
+                )
+
+                logger.error(
+                    f"Notification {notification.id} "
+                    f"permanently failed: {exc}"
+                )
+
+                raise
+
+            notification.save(
+                update_fields=[
+                    "retry_count",
+                    "last_retry_at",
+                    "error_message",
+                ]
+            )
+
+        except Notification.DoesNotExist:
+            pass
+
+        logger.warning(
+            f"Retry {self.request.retries + 1}/3 "
+            f"for notification {notification_id}"
+        )
+
+        raise self.retry(exc=exc)
 
 
 @shared_task
 def send_daily_report():
     """
-    It will run automatically every night at 12 AM.
-    How many users registered today, and how many notifications were sent?
+    Daily statistics report.
+    Runs via Celery Beat.
     """
+
     from django.contrib.auth import get_user_model
     from .models import Notification
-    from django.utils import timezone
 
     User = get_user_model()
+
     today = timezone.now().date()
 
-    # Today's Statuses
-    new_users = User.objects.filter(
-        date_joined__date=today
-    ).count()
-
-    notifications_sent = Notification.objects.filter(
-        created_at__date=today,
-        status=Notification.STATUS_SENT
-    ).count()
-
-    notifications_failed = Notification.objects.filter(
-        created_at__date=today,
-        status=Notification.STATUS_FAILED
-    ).count()
-
     report = {
-        'date': str(today),
-        'new_users': new_users,
-        'notifications_sent': notifications_sent,
-        'notifications_failed': notifications_failed,
+        "date": str(today),
+        "new_users": User.objects.filter(
+            date_joined__date=today
+        ).count(),
+
+        "notifications_sent": Notification.objects.filter(
+            created_at__date=today,
+            status=Notification.STATUS_SENT
+        ).count(),
+
+        "notifications_failed": Notification.objects.filter(
+            created_at__date=today,
+            status=Notification.STATUS_FAILED
+        ).count(),
     }
 
     logger.info(f"Daily Report: {report}")
+
     return report
 
 
 @shared_task
 def retry_failed_notifications():
     """
-    It will run every 30 minutes.
-    It will retry the notifications that failed.
+    Runs every 30 minutes.
+
+    Retries permanently failed
+    notifications.
     """
+
     from .models import Notification
 
-    failed = Notification.objects.filter(
+    failed_notifications = Notification.objects.filter(
         status=Notification.STATUS_FAILED
-    )[:10] 
+    ).order_by("created_at")[:10]
 
     retried = 0
-    for notification in failed:
-        if notification.user:
-           
-            send_welcome_email.delay(notification.user.id)
-            retried += 1
 
-    logger.info(f"Retried {retried} failed notifications")
-    return f"Retried: {retried}"
+    for notification in failed_notifications:
+
+        notification.status = (
+            Notification.STATUS_PENDING
+        )
+
+        notification.error_message = ""
+
+        notification.last_retry_at = (
+            timezone.now()
+        )
+
+        notification.save(
+            update_fields=[
+                "status",
+                "error_message",
+                "last_retry_at",
+            ]
+        )
+
+        send_welcome_email.delay(
+            notification.id
+        )
+
+        retried += 1
+
+    logger.info(
+        f"Retried {retried} failed notifications"
+    )
+
+    return {
+        "retried": retried
+    }

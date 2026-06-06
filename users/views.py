@@ -1,69 +1,54 @@
+from django.db import transaction
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from django.contrib.auth import get_user_model
-from notifications.tasks import send_welcome_email
-from drf_spectacular.utils import extend_schema
 
-User = get_user_model()
+from notifications.models import Notification
+from notifications.tasks import send_welcome_email
+
+from .serializers import RegisterSerializer
+
 
 class RegisterView(APIView):
-    @extend_schema(
-        summary="Register a new user",
-        description="Creates user account and sends welcome email via Celery background task",
-        request={
-            'application/json': {
-                'type': 'object',
-                'properties': {
-                    'username': {'type': 'string', 'example': 'sagar'},
-                    'email': {'type': 'string', 'example': 'sagar@test.com'},
-                    'password': {'type': 'string', 'example': 'test1234'},
-                }
-            }
-        },
-        responses={201: {'description': 'User created, email queued'}},
-    )
+
     def post(self, request):
-        username = request.data.get('username')
-        email = request.data.get('email')
-        password = request.data.get('password')
 
-        # 1. Check if all fields are provided
-        if not all([username, email, password]):
-            return Response(
-                {'error': 'username, email, and password are required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # 2. Check if username already exists 
-        if User.objects.filter(username=username).exists():
-            return Response(
-                {'error': 'Username already taken'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # 3. Check if email already exists
-        if User.objects.filter(email=email).exists():
-            return Response(
-                {'error': 'Email already registered'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # 4.create user database
-        user = User.objects.create_user(
-            username=username,
-            email=email,
-            password=password
+        serializer = RegisterSerializer(
+            data=request.data
         )
 
-        # 5. Send the task to queue via email — user.id will be passed to the background using .delay().
-        send_welcome_email.apply_async(args=[user.id], countdown=1)
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        with transaction.atomic():
+
+            user = serializer.save()
+
+            notification = Notification.objects.create(
+                user=user,
+                notification_type=Notification.TYPE_WELCOME,
+                subject=f"Welcome to NotifyPro, {user.username}!",
+                message=(
+                    f"Hi {user.username},\n\n"
+                    "Your account has been successfully created.\n\n"
+                    "Thank you for joining NotifyPro!"
+                ),
+            )
+
+        send_welcome_email.delay(
+            notification.id
+        )
 
         return Response(
             {
-                'message': 'Registration successful! Welcome email is being sent.',
-                'user_id': user.id,
-                'email': user.email
+                "message": (
+                    "Registration successful! "
+                    "Welcome email is being sent."
+                ),
+                "user_id": user.id,
+                "email": user.email,
             },
-            status=status.HTTP_201_CREATED
+            status=status.HTTP_201_CREATED,
         )
