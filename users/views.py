@@ -1,4 +1,3 @@
-# views.py
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -36,7 +35,7 @@ class RegisterView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 2. Check if username already exists (FIX: Crashing से बचने के लिए सुरक्षा जोड़ी गई)
+        # 2. Check if username already exists 
         if User.objects.filter(username=username).exists():
             return Response(
                 {'error': 'Username already taken'},
@@ -50,15 +49,15 @@ class RegisterView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 4. User database mein banao
+        # 4.create user database
         user = User.objects.create_user(
             username=username,
             email=email,
             password=password
         )
 
-        # 5. Email task queue mein bhejo — .delay() se user.id background mein chala jayega
-        send_welcome_email.delay(user.id)
+        # 5. Send the task to queue via email — user.id will be passed to the background using .delay().
+        send_welcome_email.apply_async(args=[user.id], countdown=1)
 
         return Response(
             {

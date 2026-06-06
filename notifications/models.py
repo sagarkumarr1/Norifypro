@@ -40,7 +40,7 @@ class Notification(models.Model):
     )
     subject = models.CharField(max_length=255)
     message = models.TextField()
-    error_message = models.TextField(blank=True)  # fail hua toh reason
+    error_message = models.TextField(blank=True)  
     created_at = models.DateTimeField(auto_now_add=True)
     sent_at = models.DateTimeField(null=True, blank=True)
 

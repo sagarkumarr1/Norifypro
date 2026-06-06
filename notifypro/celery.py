@@ -6,5 +6,5 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'notifypro.settings')
 app = Celery('notifypro')
 app.config_from_object('django.conf:settings', namespace='CELERY')
 
-# Sab apps ke tasks.py automatic load honge
+# All apps  tasks.py automatic load 
 app.autodiscover_tasks()

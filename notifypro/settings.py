@@ -4,7 +4,7 @@ import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# ✅ .env se aayega
+# .env
 SECRET_KEY = config('SECRET_KEY')
 DEBUG = config('DEBUG', default=False, cast=bool)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*').split(',')
@@ -54,7 +54,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'notifypro.wsgi.application'
 
-# ✅ Database — .env se aayega
+# Database — .env
 import dj_database_url
 
 DATABASE_URL = config('DATABASE_URL', default=None)
@@ -90,7 +90,7 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'users.User'
 
-# ✅ Celery — .env se aayega
+# Celery — .env 
 CELERY_BROKER_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = 'django-db'
 CELERY_CACHE_BACKEND = 'django-cache'
@@ -111,7 +111,7 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
-# ✅ Email — .env se aayega
+# Email — .env 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
