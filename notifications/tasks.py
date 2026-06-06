@@ -1,5 +1,4 @@
-#celery ka task file hai
-
+# tasks.py
 from celery import shared_task
 from django.core.mail import send_mail
 from django.utils import timezone
@@ -15,13 +14,14 @@ logger = logging.getLogger(__name__)
 )
 def send_welcome_email(self, user_id):
     """
-    Welcome email queue mein dalta hai — background mein chalta hai.
+    Welcome email queue — Run in background.
     Fail hone pe 3 baar retry karta hai, 60 sec baad.
     """
     from django.contrib.auth import get_user_model
     from .models import Notification
 
     User = get_user_model()
+    notification = None  # FIX: Variable को पहले ही None इनिशियलाइज़ किया ताकि except ब्लॉक क्रैश न हो
 
     try:
         user = User.objects.get(id=user_id)
@@ -57,17 +57,18 @@ def send_welcome_email(self, user_id):
         return "User not found"
 
     except Exception as exc:
-        # Fail hua — record update karo, phir retry
-        try:
-            notification.status = Notification.STATUS_FAILED
-            notification.error_message = str(exc)
-            notification.save()
-        except:
-            pass
+        # Fail hua — record update karo (अगर नोटिफिकेशन ऑब्जेक्ट बन चुका था), फिर retry
+        if notification:
+            try:
+                notification.status = Notification.STATUS_FAILED
+                notification.error_message = str(exc)
+                notification.save()
+            except Exception as db_err:
+                logger.error(f"Failed to update notification status in DB: {db_err}")
 
         logger.error(f"Email failed for user {user_id}: {exc}")
-        raise self.retry(exc=exc)  # Retry karega 3 baar
-    
+        raise self.retry(exc=exc)  # Celery 3 बार रिट्राय करेगा
+
 
 @shared_task
 def send_daily_report():
@@ -78,7 +79,6 @@ def send_daily_report():
     from django.contrib.auth import get_user_model
     from .models import Notification
     from django.utils import timezone
-    from datetime import timedelta
 
     User = get_user_model()
     today = timezone.now().date()
@@ -119,13 +119,14 @@ def retry_failed_notifications():
 
     failed = Notification.objects.filter(
         status=Notification.STATUS_FAILED
-    )[:10]  # ek baar mein max 10
+    )[:10]  # Ek baar mein max 10
 
     retried = 0
     for notification in failed:
-        # Dobara queue mein dalo
-        send_welcome_email.delay(notification.user.id)
-        retried += 1
+        if notification.user:
+            # Dobara queue mein dalo
+            send_welcome_email.delay(notification.user.id)
+            retried += 1
 
     logger.info(f"Retried {retried} failed notifications")
     return f"Retried: {retried}"
