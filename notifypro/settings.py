@@ -55,7 +55,6 @@ TEMPLATES = [
 WSGI_APPLICATION = 'notifypro.wsgi.application'
 
 # Database — .env
-import dj_database_url
 
 DATABASE_URL = config('DATABASE_URL', default=None)
 
